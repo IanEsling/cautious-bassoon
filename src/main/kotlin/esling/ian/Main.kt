@@ -1,25 +1,55 @@
 package esling.ian
 
-import org.http4k.client.ApacheClient
+import esling.ian.handlers.*
+import esling.ian.model.accountStartingBalance
+import esling.ian.model.knownAccounts
+import esling.ian.model.startingTransactions
+import org.http4k.core.HttpHandler
 import org.http4k.core.Method
-import org.http4k.core.Request
 import org.http4k.core.Response
 import org.http4k.core.Status.Companion.OK
+import org.http4k.routing.bind
+import org.http4k.routing.routes
+import org.http4k.server.Http4kServer
 import org.http4k.server.Jetty
 import org.http4k.server.asServer
+import java.time.Clock
 
+private val accountBalances = AccountBalances(startingTransactions, accountStartingBalance, knownAccounts)
+
+private val transferRequestProcessor = TransferRequestProcessor(
+    startingTransactions.toMutableList(),
+    Clock.systemDefaultZone(),
+    accountBalances
+)
+
+val defaultValidators = listOf(
+    requestAmountValidator(),
+    sameAccountsValidator(),
+    amountPrecisionValidator(),
+    knownAccountsValidator()
+)
+
+fun accountTransferApp(
+    transferRequestHandler: HttpHandler,
+    balanceRequestHandler: HttpHandler
+): HttpHandler =
+    routes(
+        "/ping" bind Method.GET to { Response(OK) },
+        "/transfer" bind Method.PUT to transferRequestHandler,
+        "/balances/{ref:.*}" bind Method.GET to balanceRequestHandler
+    )
+
+fun accountTransferServer(port: Int): Http4kServer = accountTransferApp(
+    transferRequestHandler(
+        transferRequestProcessor,
+        defaultValidators
+    ),
+    balanceRequestHandler(accountBalances)
+).asServer(Jetty(port))
 
 fun main() {
-    val app = { request: Request -> Response(OK).body("Hello, ${request.query("name")}!") }
+    val server = accountTransferServer(9000)
 
-    val jettyServer = app.asServer(Jetty(9000)).start()
-
-    val request = Request(Method.GET, "http://localhost:9000").query("name", "John Doe")
-
-    val client = ApacheClient()
-
-    println(client(request))
-
-    jettyServer.stop()
-
+    server.start()
 }
